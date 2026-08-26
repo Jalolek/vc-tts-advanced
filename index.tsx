@@ -10,7 +10,7 @@ import { Flex } from "@components/Flex";
 import definePlugin from "@utils/types";
 import type { Message } from "@vencord/discord-types";
 import { findByPropsLazy } from "@webpack";
-import { Menu, React } from "@webpack/common";
+import { FluxDispatcher, Menu, React } from "@webpack/common";
 import type { MouseEvent, ReactElement } from "react";
 
 import { FlagImage, getSelectedLanguages, settings } from "./settings";
@@ -51,10 +51,20 @@ function getVoiceForLang(lang: string) {
         ?? voices.find(v => v.lang.toLowerCase().startsWith(prefix));
 }
 
-function speakInLanguage(text: string, lang?: string) {
+function speakInLanguage(text: string, lang?: string, message?: Message) {
     if (!text || typeof window.speechSynthesis === "undefined") return;
 
     window.speechSynthesis.cancel();
+
+    // Notify Discord that we're speaking a message
+    if (message) {
+        FluxDispatcher.dispatch({
+            type: "SPEAKING_MESSAGE",
+            messageId: message.id,
+            channelId: message.channel_id
+        });
+    }
+
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = getDiscordSpeechRate();
 
@@ -64,6 +74,17 @@ function speakInLanguage(text: string, lang?: string) {
         if (voice) utterance.voice = voice;
     }
 
+    // Notify Discord when speech finishes
+    utterance.onend = () => {
+        FluxDispatcher.dispatch({ type: "STOP_SPEAKING" });
+        currentUtterance = null;
+    };
+
+    utterance.onerror = () => {
+        FluxDispatcher.dispatch({ type: "STOP_SPEAKING" });
+        currentUtterance = null;
+    };
+
     currentUtterance = utterance;
     window.speechSynthesis.speak(utterance);
 }
@@ -71,6 +92,7 @@ function speakInLanguage(text: string, lang?: string) {
 function stopSpeech() {
     if (currentUtterance) {
         window.speechSynthesis.cancel();
+        FluxDispatcher.dispatch({ type: "STOP_SPEAKING" });
         currentUtterance = null;
     }
 }
@@ -84,11 +106,7 @@ function isStopSpeakingItem(item: ReactElement<any> | null | undefined) {
     if (typeof id === "string" && id.includes("stop")) return true;
 
     const label = labelText(item?.props?.label);
-    if (/stop\s*speak/i.test(label)) {
-        stopSpeech();
-        return true;
-    }
-    return false;
+    return /stop\s*speak/i.test(label);
 }
 
 function isSpeakMessageItem(item: ReactElement<any> | null | undefined) {
@@ -151,11 +169,17 @@ function makeSpeakMenuItem(original: ReactElement<any>, message: Message) {
     const originalAction = original.props.action as ((e: MouseEvent) => void) | undefined;
 
     const runDefault = (e?: MouseEvent) => {
+        // Check if we're currently speaking - if so, stop instead of starting
+        if (window.speechSynthesis?.speaking || currentUtterance) {
+            stopSpeech();
+            return;
+        }
+
         if (originalAction) {
             originalAction((e ?? { preventDefault() { }, stopPropagation() { } }) as MouseEvent);
             return;
         }
-        if (content) speakInLanguage(content);
+        if (content) speakInLanguage(content, undefined, message);
     };
 
     if (!langs.length) {
@@ -188,7 +212,7 @@ function makeSpeakMenuItem(original: ReactElement<any>, message: Message) {
                             runDefault();
                             return;
                         }
-                        speakInLanguage(content, lang.code);
+                        speakInLanguage(content, lang.code, message);
                     }}
                 />
             ))}
