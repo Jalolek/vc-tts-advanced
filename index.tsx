@@ -7,7 +7,6 @@
 import { findGroupChildrenByChildId, NavContextMenuPatchCallback } from "@api/ContextMenu";
 import { migratePluginSettings } from "@api/Settings";
 import { Flex } from "@components/Flex";
-import { getIntlMessage } from "@utils/discord";
 import definePlugin from "@utils/types";
 import type { Message } from "@vencord/discord-types";
 import { findByPropsLazy } from "@webpack";
@@ -22,6 +21,8 @@ const SPEAK_IDS = ["speak-message", "speak-message-item", "message-speak"] as co
 
 /** Discord DeviceSettingsStore for Speak Message / TTS rate. */
 const TtsStore = findByPropsLazy("speechRate", "currentMessage");
+
+let currentUtterance: SpeechSynthesisUtterance | null = null;
 
 function getMessageContent(message: Message) {
     return message.content
@@ -54,7 +55,6 @@ function speakInLanguage(text: string, lang?: string) {
     if (!text || typeof window.speechSynthesis === "undefined") return;
 
     window.speechSynthesis.cancel();
-
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = getDiscordSpeechRate();
 
@@ -64,21 +64,30 @@ function speakInLanguage(text: string, lang?: string) {
         if (voice) utterance.voice = voice;
     }
 
+    currentUtterance = utterance;
     window.speechSynthesis.speak(utterance);
+}
+
+function stopSpeech() {
+    if (currentUtterance) {
+        window.speechSynthesis.cancel();
+        currentUtterance = null;
+    }
+}
+
+function labelText(label: unknown): string {
+    return typeof label === "string" ? label : "";
 }
 
 function isStopSpeakingItem(item: ReactElement<any> | null | undefined) {
     const id = item?.props?.id;
     if (typeof id === "string" && id.includes("stop")) return true;
 
-    const label = item?.props?.label;
-    if (typeof label === "string" && /stop/i.test(label)) return true;
-
-    try {
-        const stopLabel = getIntlMessage("STOP_SPEAKING");
-        if (typeof stopLabel === "string" && label === stopLabel) return true;
-    } catch { /* ignore */ }
-
+    const label = labelText(item?.props?.label);
+    if (/stop\s*speak/i.test(label)) {
+        stopSpeech();
+        return true;
+    }
     return false;
 }
 
@@ -91,13 +100,7 @@ function isSpeakMessageItem(item: ReactElement<any> | null | undefined) {
         if (id.includes("speak") && !id.includes("stop")) return true;
     }
 
-    const label = item.props.label;
-    try {
-        const speakLabel = getIntlMessage("SPEAK_MESSAGE");
-        if (typeof speakLabel === "string" && label === speakLabel) return true;
-    } catch { /* ignore */ }
-
-    return typeof label === "string" && /^speak message$/i.test(label);
+    return /^speak(\s+message)?$/i.test(labelText(item.props.label));
 }
 
 function findSpeakMessageSlot(children: Array<ReactElement<any> | null>) {
